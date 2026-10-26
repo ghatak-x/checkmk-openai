@@ -1,0 +1,8 @@
+title: OpenAI Platform: Project costs
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows provider-reported cost for one project. No thresholds are hard-coded; optional today and month-to-date upper thresholds can be configured. Usage/cost documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+item: OpenAI project name.
+discovery: Project cost service discovery can be enabled or disabled with the OpenAI Platform project service discovery rule.  One service is discovered for each project returned by OpenAI.

@@ -1,0 +1,8 @@
+title: OpenAI Status: Individual API endpoint
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors one Status API endpoint. Individual endpoint services are optional and disabled by default because the aggregate OpenAI Status API service normally provides the useful operational signal. The exact queried URL is shown in the service output. Human-readable provider status: https://status.openai.com/.
+item: Human-readable endpoint label such as Summary, Components or Incidents.
+discovery: Services are created only when individual endpoint services are enabled in the OpenAI public status special-agent rule.

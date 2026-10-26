@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 Sudhir Chauhan
+# License: GNU General Public License v2
+# SPDX-License-Identifier: GPL-2.0-only
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from collections import Counter, defaultdict
+from typing import Any
+from urllib.parse import urljoin
+
+import requests
+
+from cmk.utils.http_proxy_config import HTTPProxyConfig, deserialize_http_proxy_config
+
+DEFAULT_URL = "https://status.openai.com"
+
+ENDPOINTS: tuple[tuple[str, str, bool], ...] = (
+    ("summary", "/api/v2/summary.json", False),
+    ("components", "/api/v2/components.json", False),
+    ("incidents", "/api/v2/incidents.json", False),
+    ("unresolved_incidents", "/api/v2/incidents/unresolved.json", True),
+    ("active_maintenance", "/api/v2/scheduled-maintenances/active.json", True),
+    ("upcoming_maintenance", "/api/v2/scheduled-maintenances/upcoming.json", True),
+    ("maintenance_history", "/api/v2/scheduled-maintenances.json", True),
+)
+
+ENDPOINT_LABELS = {
+    "summary": "Summary",
+    "components": "Components",
+    "incidents": "Incidents",
+    "unresolved_incidents": "Unresolved incidents",
+    "active_maintenance": "Active maintenance",
+    "upcoming_maintenance": "Upcoming maintenance",
+    "maintenance_history": "Maintenance history",
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Checkmk special agent for OpenAI Status")
+    parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--proxy")
+    parser.add_argument(
+        "--component-services",
+        choices=("aggregate_only", "selected", "all"),
+        default="aggregate_only",
+    )
+    parser.add_argument("--selected-component", action="append", default=[])
+    parser.add_argument("--individual-endpoint-services", action="store_true")
+    parser.add_argument("--no-verify-tls", action="store_true")
+    return parser.parse_args()
+
+
+def _safe_error(exc: Exception) -> str:
+    # Never forward arbitrary response bodies. They are not useful here and may
+    # contain upstream/internal details.
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "request timed out"
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "TLS verification failed"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "connection failed"
+    return exc.__class__.__name__
+
+
+def _fetch(
+    base_url: str,
+    name: str,
+    path: str,
+    optional: bool,
+    timeout: float,
+    proxy: HTTPProxyConfig,
+    verify_tls: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    started = time.monotonic()
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            proxies=proxy.to_requests_proxies(),
+            headers={"Accept": "application/json", "User-Agent": "checkmk-openai-status/0.0.1"},
+            verify=verify_tls,
+        )
+        elapsed = time.monotonic() - started
+        meta: dict[str, Any] = {
+            "name": name,
+            "label": ENDPOINT_LABELS[name],
+            "url": url,
+            "optional": optional,
+            "http_status": int(response.status_code),
+            "response_time": elapsed,
+            "error": None,
+        }
+        if response.status_code == 404 and optional:
+            return meta, None
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            meta["error"] = "invalid JSON response"
+            return meta, None
+        return meta, payload if isinstance(payload, dict) else None
+    except requests.exceptions.RequestException as exc:
+        elapsed = time.monotonic() - started
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return (
+            {
+                "name": name,
+                "label": ENDPOINT_LABELS[name],
+                "url": url,
+                "optional": optional,
+                "http_status": int(status) if status is not None else None,
+                "response_time": elapsed,
+                "error": _safe_error(exc),
+            },
+            None,
+        )
+
+
+def _component_rows(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    rows = payload.get("components", [])
+    if not isinstance(rows, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        result.append(
+            {
+                "id": str(raw.get("id", "")),
+                "name": str(raw.get("name", "")),
+                "status": str(raw.get("status", "unknown")),
+                "description": raw.get("description"),
+                "group_id": raw.get("group_id"),
+                "updated_at": raw.get("updated_at"),
+            }
+        )
+    return result
+
+
+def _add_service_items(components: list[dict[str, Any]]) -> None:
+    counts = Counter(c.get("name", "") for c in components)
+    for component in components:
+        name = component.get("name", "") or "Unnamed component"
+        component_id = component.get("id", "")
+        if counts[name] > 1 and component_id:
+            component["service_item"] = f"{name} [{component_id[:8]}]"
+        else:
+            component["service_item"] = name
+
+
+def _normalize_updates(raw_updates: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_updates, list):
+        return []
+    updates: list[dict[str, Any]] = []
+    for raw in raw_updates:
+        if not isinstance(raw, dict):
+            continue
+        updates.append(
+            {
+                "status": raw.get("status"),
+                "body": raw.get("body"),
+                "created_at": raw.get("created_at"),
+                "updated_at": raw.get("updated_at"),
+            }
+        )
+    return updates
+
+
+def _incident_rows(payload: dict[str, Any] | None, base_url: str) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    raw_incidents = payload.get("incidents", [])
+    if not isinstance(raw_incidents, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in raw_incidents:
+        if not isinstance(raw, dict):
+            continue
+        components = raw.get("components", [])
+        affected: list[str] = []
+        if isinstance(components, list):
+            for component in components:
+                if isinstance(component, dict):
+                    name = component.get("name")
+                    if name:
+                        affected.append(str(name))
+        updates = _normalize_updates(raw.get("incident_updates"))
+        latest = updates[0] if updates else {}
+        incident_url = raw.get("shortlink") or raw.get("url") or raw.get("html_url")
+        if not incident_url:
+            # Do not invent a status.openai.com incident slug from an opaque API ID.
+            incident_url = base_url.rstrip("/") + "/"
+        result.append(
+            {
+                "id": str(raw.get("id", "")),
+                "name": str(raw.get("name", "Unnamed incident")),
+                "status": str(raw.get("status", "unknown")),
+                "impact": str(raw.get("impact", "none")),
+                "created_at": raw.get("created_at"),
+                "updated_at": raw.get("updated_at"),
+                "started_at": raw.get("started_at") or raw.get("created_at"),
+                "resolved_at": raw.get("resolved_at"),
+                "affected_components": affected,
+                "latest_update": latest.get("body"),
+                "latest_update_at": latest.get("updated_at") or latest.get("created_at"),
+                "url": incident_url,
+            }
+        )
+    return result
+
+
+def _maintenance_rows(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    candidates = payload.get("scheduled_maintenances")
+    if candidates is None:
+        candidates = payload.get("maintenances")
+    if not isinstance(candidates, list):
+        return []
+    result = []
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        result.append(
+            {
+                "id": str(raw.get("id", "")),
+                "name": str(raw.get("name", "Unnamed maintenance")),
+                "status": str(raw.get("status", "unknown")),
+                "impact": str(raw.get("impact", "none")),
+                "scheduled_for": raw.get("scheduled_for"),
+                "scheduled_until": raw.get("scheduled_until"),
+                "updated_at": raw.get("updated_at"),
+            }
+        )
+    return result
+
+
+def _integrity_observations(
+    components_payload: dict[str, Any] | None,
+    summary_payload: dict[str, Any] | None,
+) -> list[str]:
+    observations: list[str] = []
+    component_sets = {
+        "components": _component_rows(components_payload),
+        "summary": _component_rows(summary_payload),
+    }
+
+    # Duplicate display names are valid. Different endpoint membership is also
+    # valid with OpenAI's current Statuspage-compatible backend. Only flag
+    # malformed rows and conflicts for the same stable component ID.
+    for source, rows in component_sets.items():
+        seen: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            cid = row.get("id", "")
+            name = row.get("name", "")
+            status = row.get("status", "")
+            if not cid or not name or not status:
+                observations.append(f"{source}: malformed component record")
+                continue
+            signature = (name, status)
+            previous = seen.get(cid)
+            if previous is not None and previous != signature:
+                observations.append(f"{source}: duplicate component id {cid} has conflicting values")
+            seen[cid] = signature
+
+    by_source: dict[str, dict[str, tuple[str, str]]] = {}
+    for source, rows in component_sets.items():
+        by_source[source] = {
+            row["id"]: (row["name"], row["status"])
+            for row in rows
+            if row.get("id") and row.get("name") and row.get("status")
+        }
+    common_ids = set(by_source["components"]) & set(by_source["summary"])
+    for cid in sorted(common_ids):
+        comp_name, comp_status = by_source["components"][cid]
+        sum_name, sum_status = by_source["summary"][cid]
+        if comp_name != sum_name:
+            observations.append(f"component {cid}: conflicting names between endpoints")
+        if comp_status != sum_status:
+            observations.append(
+                f"component {comp_name} ({cid}): conflicting status {comp_status}/{sum_status}"
+            )
+    return observations
+
+
+def collect(args: argparse.Namespace) -> dict[str, Any]:
+    proxy = deserialize_http_proxy_config(args.proxy)
+    endpoint_meta: list[dict[str, Any]] = []
+    payloads: dict[str, dict[str, Any] | None] = {}
+    for name, path, optional in ENDPOINTS:
+        meta, payload = _fetch(
+            args.url, name, path, optional, args.timeout, proxy, not args.no_verify_tls
+        )
+        endpoint_meta.append(meta)
+        payloads[name] = payload
+
+    components = _component_rows(payloads.get("components"))
+    if not components:
+        components = _component_rows(payloads.get("summary"))
+    _add_service_items(components)
+
+    incidents = _incident_rows(payloads.get("incidents"), args.url)
+    unresolved_payload = _incident_rows(payloads.get("unresolved_incidents"), args.url)
+    if unresolved_payload:
+        unresolved_ids = {row["id"] for row in unresolved_payload if row.get("id")}
+    else:
+        unresolved_ids = {
+            row["id"]
+            for row in incidents
+            if row.get("id")
+            and str(row.get("status", "")).lower() not in {"resolved", "completed", "postmortem"}
+        }
+
+    active_maintenance = _maintenance_rows(payloads.get("active_maintenance"))
+    upcoming_maintenance = _maintenance_rows(payloads.get("upcoming_maintenance"))
+    maintenance_history = _maintenance_rows(payloads.get("maintenance_history"))
+
+    summary_payload = payloads.get("summary") or {}
+    status = summary_payload.get("status", {}) if isinstance(summary_payload, dict) else {}
+    if not isinstance(status, dict):
+        status = {}
+
+    return {
+        "schema": 2,
+        "base_url": args.url.rstrip("/") + "/",
+        "configuration": {
+            "component_services": args.component_services,
+            "selected_components": args.selected_component,
+            "individual_endpoint_services": bool(args.individual_endpoint_services),
+        },
+        "overview": {
+            "indicator": str(status.get("indicator", "unknown")),
+            "description": str(status.get("description", "Unknown")),
+        },
+        "endpoints": endpoint_meta,
+        "components": components,
+        "incidents": incidents,
+        "unresolved_incident_ids": sorted(unresolved_ids),
+        "maintenance": {
+            "active": active_maintenance,
+            "upcoming": upcoming_maintenance,
+            "history": maintenance_history,
+        },
+        "integrity_observations": _integrity_observations(
+            payloads.get("components"), payloads.get("summary")
+        ),
+    }
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        data = collect(args)
+    except Exception as exc:  # defensive boundary for special-agent execution
+        sys.stderr.write(f"OpenAI status collection failed: {_safe_error(exc)}\n")
+        return 1
+    print("<<<openai_statuspage:sep(0)>>>")
+    print(json.dumps(data, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

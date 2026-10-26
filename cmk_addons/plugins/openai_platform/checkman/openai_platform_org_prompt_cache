@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization prompt cache
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows prompt-cache effectiveness for Completions/Responses using provider-reported input_tokens and input_cached_tokens. The cache-read ratio is cached input tokens divided by total input tokens; it is a token-level ratio, not a request hit rate. The service also lists current project and model breakdowns in Details. Its token denominator covers Completions/Responses only, so it can be lower than Organization Usage Attribution totals that include additional supported Usage API families. OpenAI's organization Usage API does not expose the portal's cache-write token windows, so cache writes are not inferred. Optional minimum cache-read-ratio and uncached-token thresholds are configured in the OpenAI Platform organization policy. Usage documentation: https://platform.openai.com/docs/api-reference/usage and token documentation: https://help.openai.com/en/articles/4936856-understanding-and-counting-tokens.
+discovery: One organization-level prompt-cache service is created from Completions/Responses usage data. Project/model inventory is dynamic and no expected count is hard-coded.

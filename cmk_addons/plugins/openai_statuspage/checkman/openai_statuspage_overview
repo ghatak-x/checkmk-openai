@@ -1,0 +1,7 @@
+title: OpenAI Status: Provider overview
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors the provider-wide status indicator published by OpenAI. This service intentionally does not use component counts to determine its state; component health is evaluated by OpenAI Status Components. The live provider page is https://status.openai.com/. States can be remapped with the OpenAI public status policy.
+discovery: One service is created whenever the openai_statuspage agent section is present.

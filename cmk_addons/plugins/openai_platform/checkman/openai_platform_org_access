@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization access
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows organization users/owners and project service-account/API-key inventory. Counts are dynamic. The OpenAI Platform organization policy can alert on semantic conditions such as no organization owner without hard-coding expected user, service-account or key totals. Project/access documentation: https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform.
+discovery: One service is created whenever organization access inventory is available.

@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization overview
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows current organization inventory: projects and users. These totals are live provider inventory and are intentionally not checked against fixed expected numbers because projects and users can change over time. Optional semantic conditions such as zero users are configurable. Project documentation: https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform.
+discovery: One service is created whenever organization inventory is available.

@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization costs
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows provider-reported organization cost for today, previous day and month-to-date. No spend thresholds are hard-coded. Optional upper thresholds are configured in the OpenAI Platform organization policy. Usage/cost documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+discovery: One service is created whenever cost data collection is enabled and available.

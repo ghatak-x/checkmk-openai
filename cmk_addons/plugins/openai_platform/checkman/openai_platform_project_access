@@ -1,0 +1,8 @@
+title: OpenAI Platform: Project access
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows users/owners, service accounts and API keys for one project. Counts are dynamic inventory; no fixed expected totals are built in. The OpenAI Platform organization policy can alert on semantic conditions such as no owner. Project/access documentation: https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform.
+item: OpenAI project name.
+discovery: One service is discovered for each project returned by OpenAI.

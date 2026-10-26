@@ -1,0 +1,7 @@
+title: OpenAI Status: Incidents
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors incidents returned by the OpenAI incidents API. The incident-record count is simply the number of records currently returned by the provider and is not a fixed baseline. Service state is determined from unresolved incidents and their impact. When an incident URL is supplied by the provider it is shown in details; otherwise the live status page https://status.openai.com/ is provided. Impact-to-state mapping is configurable.
+discovery: One service is created whenever the openai_statuspage agent section is present.

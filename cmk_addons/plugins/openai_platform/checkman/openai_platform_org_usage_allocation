@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization usage allocation
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Attributes request/call activity and token usage to the currently returned OpenAI projects. The service ranks projects by request/call activity and reports the largest contributor and share. Activity is summed across the collected OpenAI usage families and grouped by project_id. Project inventory and workload are dynamic; no expected project count is hard-coded. Optional concentration thresholds are configured in the OpenAI Platform organization policy. Usage documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+discovery: One organization-level allocation service is created. Project rows are derived dynamically from provider usage data.

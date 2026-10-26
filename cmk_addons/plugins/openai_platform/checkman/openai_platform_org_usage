@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization usage
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows provider-reported usage for the configured aggregation window. The headline uses Completions/Responses when active, otherwise an active usage family is shown. Counts are workload data and are not compared with fixed totals. Optional thresholds are disabled by default. Usage documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+discovery: One service is created whenever usage data is available.

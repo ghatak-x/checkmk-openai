@@ -1,0 +1,7 @@
+title: OpenAI Status: API availability
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors the Status API routes used by the collector. Required routes are the core inputs for summary, components and incidents. Optional Statuspage-compatible routes may legitimately return HTTP 404 on OpenAI current backend. The endpoint count is collector coverage, not a fixed provider baseline. Exact endpoint URLs are shown in service details. States can be configured with the OpenAI public status policy. Human-readable provider status: https://status.openai.com/.
+discovery: One aggregate service is created whenever the openai_statuspage agent section is present.

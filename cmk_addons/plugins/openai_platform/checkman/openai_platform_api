@@ -1,0 +1,7 @@
+title: OpenAI Platform: API collection
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors the authenticated OpenAI Platform API collection itself. The endpoint count represents the set queried by this collector version, not a fixed provider inventory. Authentication/access failures, required endpoint failures and optional endpoint failures have configurable states. API reference: https://platform.openai.com/docs/api-reference.
+discovery: One service is created whenever the openai_platform agent section is present.

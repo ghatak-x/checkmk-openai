@@ -1,0 +1,7 @@
+title: OpenAI Status: Maintenance
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors active and upcoming scheduled-maintenance records returned by OpenAI. Counts are dynamic provider data and are not compared with a fixed expected number. Active and upcoming maintenance states are configurable. Live status: https://status.openai.com/.
+discovery: One service is created whenever the openai_statuspage agent section is present.

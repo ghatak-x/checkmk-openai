@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 Sudhir Chauhan
+# License: GNU General Public License v2
+# SPDX-License-Identifier: GPL-2.0-only
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import quote
+
+import requests
+
+from cmk.password_store.v1_unstable import parser_add_secret_option, resolve_secret_option
+from cmk.utils.http_proxy_config import HTTPProxyConfig, deserialize_http_proxy_config
+
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+USER_AGENT = "checkmk-openai-platform/0.0.1"
+
+USAGE_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("completions", "/organization/usage/completions", ("project_id", "model")),
+    ("embeddings", "/organization/usage/embeddings", ("project_id", "model")),
+    ("images", "/organization/usage/images", ("project_id", "model")),
+    ("moderations", "/organization/usage/moderations", ("project_id", "model")),
+    ("audio_speeches", "/organization/usage/audio_speeches", ("project_id", "model")),
+    ("audio_transcriptions", "/organization/usage/audio_transcriptions", ("project_id", "model")),
+    ("code_interpreter_sessions", "/organization/usage/code_interpreter_sessions", ("project_id",)),
+    ("vector_stores", "/organization/usage/vector_stores", ("project_id",)),
+    ("file_search_calls", "/organization/usage/file_search_calls", ("project_id",)),
+    ("web_search_calls", "/organization/usage/web_search_calls", ("project_id", "model")),
+)
+
+# Usage API families for which OpenAI documents user_id and api_key_id grouping.
+ATTRIBUTION_CATEGORIES = frozenset({
+    "completions",
+    "embeddings",
+    "images",
+    "moderations",
+    "audio_speeches",
+    "audio_transcriptions",
+})
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Checkmk special agent for OpenAI Platform")
+    parser_add_secret_option(
+        parser,
+        long="--admin-key",
+        help="OpenAI organization Admin API key",
+        required=True,
+    )
+    parser_add_secret_option(
+        parser,
+        long="--project-key",
+        help="Optional OpenAI project API key",
+        required=False,
+    )
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--usage-window", type=int, default=86400)
+    parser.add_argument("--include-archived", action="store_true")
+    parser.add_argument("--project-include", default=".*")
+    parser.add_argument("--project-exclude", default="")
+    parser.add_argument("--proxy")
+    parser.add_argument("--no-verify-tls", action="store_true")
+    parser.add_argument("--no-usage-attribution", action="store_true")
+    return parser.parse_args()
+
+
+def _sanitize_http_error(status: int | None) -> tuple[str, str]:
+    if status == 401:
+        return "invalid_api_key", "Authentication failed"
+    if status == 403:
+        return "access_denied", "Access denied"
+    if status == 429:
+        return "rate_limited", "Rate limited"
+    if status is not None and status >= 500:
+        return "server_error", "OpenAI API server error"
+    if status is not None:
+        return f"http_{status}", f"HTTP {status}"
+    return "request_failed", "Request failed"
+
+
+def _sanitize_exception(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "timeout", "Request timed out"
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "tls_error", "TLS verification failed"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "connection_error", "Connection failed"
+    return "request_failed", "Request failed"
+
+
+class Client:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        admin_key: str,
+        project_key: str | None,
+        timeout: float,
+        proxy: HTTPProxyConfig,
+        verify_tls: bool,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.admin_key = admin_key
+        self.project_key = project_key
+        self.timeout = timeout
+        self.proxies = proxy.to_requests_proxies()
+        self.verify_tls = verify_tls
+        self.calls: list[dict[str, Any]] = []
+
+    def _headers(self, auth: str) -> dict[str, str]:
+        key = self.project_key if auth == "project" else self.admin_key
+        return {
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+
+    def get(
+        self,
+        label: str,
+        path: str,
+        *,
+        params: list[tuple[str, str | int]] | None = None,
+        auth: str = "admin",
+        required: bool = True,
+    ) -> dict[str, Any] | None:
+        url = self.base_url + path
+        started = time.monotonic()
+        status: int | None = None
+        error_code: str | None = None
+        error_summary: str | None = None
+        try:
+            response = requests.get(
+                url,
+                headers=self._headers(auth),
+                params=params,
+                timeout=self.timeout,
+                proxies=self.proxies,
+                verify=self.verify_tls,
+            )
+            status = int(response.status_code)
+            if response.status_code >= 400:
+                error_code, error_summary = _sanitize_http_error(status)
+                return None
+            try:
+                payload = response.json()
+            except ValueError:
+                error_code, error_summary = "invalid_json", "Invalid JSON response"
+                return None
+            return payload if isinstance(payload, dict) else None
+        except requests.exceptions.RequestException as exc:
+            status_raw = getattr(getattr(exc, "response", None), "status_code", None)
+            status = int(status_raw) if status_raw is not None else None
+            if status is not None:
+                error_code, error_summary = _sanitize_http_error(status)
+            else:
+                error_code, error_summary = _sanitize_exception(exc)
+            return None
+        finally:
+            self.calls.append(
+                {
+                    "label": label,
+                    "path": path,
+                    "auth": auth,
+                    "required": required,
+                    "http_status": status,
+                    "response_time": time.monotonic() - started,
+                    "error_code": error_code,
+                    "error_summary": error_summary,
+                }
+            )
+
+    def get_cursor_list(
+        self,
+        label: str,
+        path: str,
+        *,
+        params: list[tuple[str, str | int]] | None = None,
+        required: bool = True,
+    ) -> list[dict[str, Any]]:
+        # Admin list resources use either after/has_more or page/next_page.
+        rows: list[dict[str, Any]] = []
+        base_params = list(params or [])
+        cursor_name: str | None = None
+        cursor_value: str | None = None
+        page = 0
+        while page < 100:
+            call_params = list(base_params)
+            if cursor_name and cursor_value:
+                call_params.append((cursor_name, cursor_value))
+            payload = self.get(
+                label if page == 0 else f"{label} page {page + 1}",
+                path,
+                params=call_params,
+                required=required,
+            )
+            if payload is None:
+                break
+            data = payload.get("data", [])
+            if isinstance(data, list):
+                rows.extend(row for row in data if isinstance(row, dict))
+            if not payload.get("has_more"):
+                break
+            nxt = payload.get("next_page") or payload.get("last_id")
+            if not nxt:
+                break
+            cursor_name = "page" if payload.get("next_page") else "after"
+            cursor_value = str(nxt)
+            page += 1
+        return rows
+
+    def get_usage(
+        self,
+        label: str,
+        path: str,
+        *,
+        start_time: int,
+        end_time: int,
+        group_by: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        buckets: list[dict[str, Any]] = []
+        page_token: str | None = None
+        page = 0
+        while page < 100:
+            params: list[tuple[str, str | int]] = [
+                ("start_time", start_time),
+                ("end_time", end_time),
+                ("bucket_width", "1h"),
+                ("limit", 168),
+            ]
+            params.extend(("group_by[]", value) for value in group_by)
+            if page_token:
+                params.append(("page", page_token))
+            payload = self.get(
+                label if page == 0 else f"{label} page {page + 1}",
+                path,
+                params=params,
+                required=False,
+            )
+            if payload is None:
+                break
+            data = payload.get("data", [])
+            if isinstance(data, list):
+                buckets.extend(row for row in data if isinstance(row, dict))
+            if not payload.get("has_more"):
+                break
+            nxt = payload.get("next_page")
+            if not nxt:
+                break
+            page_token = str(nxt)
+            page += 1
+        return buckets
+
+
+def _matches_project(project: dict[str, Any], args: argparse.Namespace) -> bool:
+    name = str(project.get("name", ""))
+    if not args.include_archived and str(project.get("status", "active")).lower() == "archived":
+        return False
+    try:
+        if not re.search(args.project_include, name):
+            return False
+        if args.project_exclude and re.search(args.project_exclude, name):
+            return False
+    except re.error:
+        # Invalid filters should not cause the secret-bearing collector to crash.
+        return False
+    return True
+
+
+def _month_start_epoch(now: datetime) -> int:
+    return int(datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp())
+
+
+def collect(args: argparse.Namespace) -> dict[str, Any]:
+    admin_key = resolve_secret_option(args, "admin-key").reveal()
+    try:
+        project_key = resolve_secret_option(args, "project-key").reveal()
+    except TypeError:
+        project_key = None
+
+    proxy = deserialize_http_proxy_config(args.proxy)
+    client = Client(
+        base_url=args.base_url,
+        admin_key=admin_key,
+        project_key=project_key,
+        timeout=args.timeout,
+        proxy=proxy,
+        verify_tls=not args.no_verify_tls,
+    )
+    now = datetime.now(timezone.utc)
+    end_time = int(now.timestamp())
+    start_time = end_time - max(3600, int(args.usage_window))
+
+    projects = client.get_cursor_list("Organization projects", "/organization/projects")
+    selected_projects = [p for p in projects if _matches_project(p, args)]
+    org_users = client.get_cursor_list("Organization users", "/organization/users")
+
+    project_rows: list[dict[str, Any]] = []
+    for project in selected_projects:
+        project_id = str(project.get("id", ""))
+        if not project_id:
+            continue
+        encoded_id = quote(project_id, safe="")
+        users = client.get_cursor_list(
+            f"Project {project_id} users", f"/organization/projects/{encoded_id}/users", required=False
+        )
+        service_accounts = client.get_cursor_list(
+            f"Project {project_id} service accounts",
+            f"/organization/projects/{encoded_id}/service_accounts",
+            required=False,
+        )
+        api_keys = client.get_cursor_list(
+            f"Project {project_id} API keys",
+            f"/organization/projects/{encoded_id}/api_keys",
+            required=False,
+        )
+        rate_limits = client.get_cursor_list(
+            f"Project {project_id} rate limits",
+            f"/organization/projects/{encoded_id}/rate_limits",
+            required=False,
+        )
+        project_rows.append(
+            {
+                "id": project_id,
+                "name": str(project.get("name", project_id)),
+                "status": str(project.get("status", "active")),
+                "created_at": project.get("created_at"),
+                "archived_at": project.get("archived_at"),
+                "users": users,
+                "service_accounts": service_accounts,
+                "api_keys": api_keys,
+                "rate_limits": rate_limits,
+            }
+        )
+
+    usage: dict[str, list[dict[str, Any]]] = {}
+    collect_attribution = not bool(args.no_usage_attribution)
+    for category, path, group_by in USAGE_SPECS:
+        effective_group_by = group_by
+        if collect_attribution and category in ATTRIBUTION_CATEGORIES:
+            # Preserve the existing project/model dimensions while requesting the
+            # documented user/API-key dimensions from the same Usage API call.
+            effective_group_by = tuple(dict.fromkeys((*group_by, "user_id", "api_key_id")))
+        usage[category] = client.get_usage(
+            f"Usage {category}",
+            path,
+            start_time=start_time,
+            end_time=end_time,
+            group_by=effective_group_by,
+        )
+
+    cost_params: list[tuple[str, str | int]] = [
+        ("start_time", _month_start_epoch(now)),
+        ("end_time", end_time),
+        ("bucket_width", "1d"),
+        ("limit", 180),
+        ("group_by[]", "project_id"),
+    ]
+    costs = client.get_cursor_list(
+        "Organization costs", "/organization/costs", params=cost_params, required=False
+    )
+
+    models: list[dict[str, Any]] = []
+    if project_key:
+        payload = client.get("Project models", "/models", auth="project", required=False)
+        if payload and isinstance(payload.get("data"), list):
+            models = [row for row in payload["data"] if isinstance(row, dict)]
+
+    return {
+        "schema": 4,
+        "collected_at": end_time,
+        "configuration": {
+            "usage_window": int(args.usage_window),
+            "include_archived": bool(args.include_archived),
+            "project_include": args.project_include,
+            "project_exclude": args.project_exclude,
+            "collect_usage_attribution": collect_attribution,
+        },
+        "api": {"calls": client.calls},
+        "organization": {
+            "users": org_users,
+            "projects": projects,
+            "usage": usage,
+            "costs": costs,
+        },
+        "projects": project_rows,
+        "models": models,
+    }
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        data = collect(args)
+    except Exception as exc:
+        # Do not expose arbitrary upstream exception strings: they can contain credentials.
+        sys.stderr.write(f"OpenAI Platform collection failed: {exc.__class__.__name__}\n")
+        return 1
+    print("<<<openai_platform:sep(0)>>>")
+    print(json.dumps(data, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

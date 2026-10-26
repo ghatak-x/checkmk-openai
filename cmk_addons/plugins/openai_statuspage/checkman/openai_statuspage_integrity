@@ -1,0 +1,7 @@
+title: OpenAI Status: Data integrity
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Validates consistency of the Status API data used by the collector. Only malformed required component records, duplicate stable component IDs with conflicting values, or conflicting data for the same stable ID across sources are treated as observations. Duplicate display names and differing component membership between endpoints are valid and intentionally ignored. The observation state is configurable. Human-readable provider status: https://status.openai.com/.
+discovery: One service is created whenever the openai_statuspage agent section is present.

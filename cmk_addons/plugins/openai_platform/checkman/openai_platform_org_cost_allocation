@@ -1,0 +1,7 @@
+title: OpenAI Platform: Organization cost allocation
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Attributes provider-reported organization cost to the currently returned OpenAI projects. The service ranks projects by month-to-date spend, reports the largest contributor and share, and reports any unattributed/other difference between the organization total and summed project rows. Project inventory is dynamic and no project count or expected share is hard-coded. Optional concentration and unattributed-cost thresholds are configured in the OpenAI Platform organization policy. Usage/cost documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+discovery: One organization-level allocation service is created. Project rows are derived dynamically from the projects returned by the special agent.

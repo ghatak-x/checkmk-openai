@@ -1,0 +1,7 @@
+title: OpenAI Status: Components
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Aggregates the live component inventory returned by OpenAI Status. The displayed total is simply the number of current component records returned by the provider at check time. This is not an expected or hard-coded total: OpenAI can add, rename or retire components. Alerting is based on component health states such as degraded performance or outage, not on the total count. Live component status: https://status.openai.com/. State mappings are configurable with the OpenAI public status policy.
+discovery: One aggregate service is always created when status data is present.

@@ -1,0 +1,8 @@
+title: OpenAI Platform: Project overview
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows the status and stable ID of one OpenAI project. Project states can be mapped to Checkmk states with the OpenAI Platform project policy. Project documentation: https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform.
+item: OpenAI project name.
+discovery: One service is discovered for each project returned by OpenAI.

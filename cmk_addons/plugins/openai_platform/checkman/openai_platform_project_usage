@@ -1,0 +1,8 @@
+title: OpenAI Platform: Project usage
+agents: openai_platform
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Shows provider-reported usage for one project in the configured aggregation window. Usage is dynamic workload data; optional thresholds are disabled by default. Usage documentation: https://help.openai.com/en/articles/10478918-reviewing-api-usage-and-costs.
+item: OpenAI project name.
+discovery: Project usage service discovery can be enabled or disabled with the OpenAI Platform project service discovery rule.  One service is discovered for each project returned by OpenAI.

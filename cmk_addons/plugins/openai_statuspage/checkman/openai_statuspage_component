@@ -1,0 +1,8 @@
+title: OpenAI Status: Individual component
+agents: openai_statuspage
+catalog: app
+license: GPLv2
+distribution: checkmk-openai extension
+description: Monitors a single OpenAI Status component. Individual component services are optional because provider component inventory is dynamic. Duplicate display names are disambiguated using a stable component-ID suffix. Live component status: https://status.openai.com/.
+item: Component display name; duplicate names include a stable component-ID suffix.
+discovery: Services are created according to the Individual component services setting in the OpenAI public status special-agent rule.
